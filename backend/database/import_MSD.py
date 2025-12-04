@@ -41,7 +41,7 @@ def read_song(path):
             "tempo": float(hdf5_getters.get_tempo(h5)),
             "loudness": float(hdf5_getters.get_loudness(h5)),
             "key": int(hdf5_getters.get_key(h5)),
-            "mode": int(hdf5_getters.get_mode(h5)),
+            "mode": int(hdf5_getters.get_mode(h5)), #1大調/0小調
 
             "timbre_mean": timbre_mean,
             "timbre_std": timbre_std,
