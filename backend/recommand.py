@@ -1,51 +1,46 @@
-import pandas as pd
-import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
+# 用bestcnn_model.pth歌曲推薦
 import sqlite3
+import numpy as np
+import pandas as pd
+from sklearn.metrics.pairwise import cosine_similarity
 
-# SQLite 資料庫路徑
-DB_PATH = "features.db"
+DB_FILE = "training_data.db"
 
-# 連線 SQLite 並讀取資料
-conn = sqlite3.connect(DB_PATH)
-df = pd.read_sql_query("SELECT * FROM songs_features", conn)
-conn.close()
-# 建立特徵矩陣
-feature_cols = [c for c in df.columns if c not in ['song_id', 'title', 'artist_name']]
-features = df[feature_cols].values
+def recommend_demo():
+    print("📂 載入資料庫...")
+    conn = sqlite3.connect(DB_FILE)
+    
+    # 1. 直接撈出全庫 Embedding
+    df = pd.read_sql("SELECT song_id, title, artist_name, embedding FROM training_songs WHERE embedding IS NOT NULL", conn)
+    conn.close()
+    
+    if df.empty:
+        print("❌ 資料庫裡沒有 Embedding，請先執行 run_precompute.py")
+        return
 
-# song_id → index
-song_id_to_index = {tid: idx for idx, tid in enumerate(df['song_id'])}
+    # 轉成 Numpy Matrix
+    def to_array(blob): return np.frombuffer(blob, dtype=np.float32)
+    matrix = np.stack(df['embedding'].apply(to_array).values)
+    
+    # 2. 隨機選一首歌來測試 
+    # 從 df 裡隨機抽一行，保證 ID 一定存在
+    target_row = df.sample(1).iloc[0]
+    target_idx = df.index.get_loc(target_row.name) # 取得它在 matrix 中的 index
+    
+    print("-" * 50)
+    print(f"🎵 目標歌曲: {target_row['title']} - {target_row['artist_name']}")
+    print("-" * 50)
+    
+    # 3. 計算相似度
+    target_vec = matrix[target_idx].reshape(1, -1)
+    sims = cosine_similarity(target_vec, matrix)[0]
+    
+    # 取前 5 名
+    top_indices = sims.argsort()[::-1][1:6]
+    
+    for i in top_indices:
+        rec_row = df.iloc[i]
+        print(f"🔥 {rec_row['title']} - {rec_row['artist_name']} (相似度: {sims[i]:.4f})")
 
-def recommend(song_id, top_k=5):
-    if song_id not in song_id_to_index:
-        print("Song ID 不存在！")
-        return None
-
-    idx = song_id_to_index[song_id]
-    query_vector = features[idx].reshape(1, -1)
-
-    # 計算餘弦相似度
-    sim_scores = cosine_similarity(query_vector, features)[0]
-
-    # 取 top_k 排除自己
-    sim_indices = sim_scores.argsort()[::-1]
-    sim_indices = [i for i in sim_indices if i != idx][:top_k]
-
-    recommendations = df.iloc[sim_indices].copy()
-    recommendations['similarity'] = sim_scores[sim_indices]
-
-    return recommendations
-
-# Demo
-query_song_id = input("請輸入歌曲 song_id：")
-rec = recommend(query_song_id, top_k=5)
-
-if rec is not None:
-    print("\n推薦歌曲清單：")
-    for i, row in rec.iterrows():
-        print(f"{i+1}. {row['song_id']} | {row.get('title', '未知名稱')} | {row.get('artist_name', '未知歌手')} | similarity: {row['similarity']:.3f}")
-        print(f"   tempo: {row['tempo']}, loudness: {row['loudness']}, key: {row['key']}, mode: {row['mode']}")
-        print("   timbre_mean:", [row[f'timbre_{j+1}'] for j in range(12)])
-        print("   pitch_mean:", [row[f'pitch_{j+1}'] for j in range(12)])
-        print("---------------------------------------------------")
+if __name__ == "__main__":
+    recommend_demo()
