@@ -46,7 +46,9 @@ def read_song(path):
             "timbre_mean": timbre_mean,
             "timbre_std": timbre_std,
             "pitches_mean": pitches_mean,
-            "pitches_std": pitches_std
+            "pitches_std": pitches_std,
+            "timbre_segments":seg_timbre,
+            "pitches_segments":seg_pitches
         }
 
         return data
@@ -61,8 +63,8 @@ def insert_song(connection, data):
     INSERT INTO songs (
         song_id, artist_name, title, year,
         duration, tempo, loudness, `key`, mode,
-        timbre_mean, timbre_std, pitches_mean, pitches_std
-    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        timbre_mean, timbre_std, pitches_mean, pitches_std, timbre_segments, pitches_segments
+    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
     """
 
     # 執行 SQL 插入
@@ -73,7 +75,9 @@ def insert_song(connection, data):
         json.dumps(data["timbre_mean"]),  
         json.dumps(data["timbre_std"]),
         json.dumps(data["pitches_mean"]),
-        json.dumps(data["pitches_std"])
+        json.dumps(data["pitches_std"]),
+        json.dumps(data["timbre_segments"].tolist(), separators=(',', ':')),
+        json.dumps(data["pitches_segments"].tolist(), separators=(',', ':'))
     ))
 
     connection.commit()  # 寫入資料庫
@@ -112,7 +116,9 @@ if __name__ == "__main__":
             timbre_mean JSON,                       -- 音色平均 (12 維)
             timbre_std  JSON,                       -- 音色標準差 (12 維)
             pitches_mean JSON,                      -- 音高平均 (12 維)
-            pitches_std  JSON                       -- 音高標準差 (12 維)
+            pitches_std  JSON,                      -- 音高標準差 (12 維)
+            timbre_segments MEDIUMTEXT,                   -- 完整音色 (N, 12) 
+            pitches_segments MEDIUMTEXT                   -- 完整音高 (N, 12)
         );
         """)
     if not os.path.exists(MSDRootDir):
