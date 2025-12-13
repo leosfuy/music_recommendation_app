@@ -1,77 +1,125 @@
-import librosa
-import numpy as np
+import os
 import json
+import numpy as np
+import librosa
 
-def extract_features(audio_path):
+
+def audio_extractor(audio_path, sr=22050, hop_length=512):
     """
-    讀取音檔並提取能與 Million Song Dataset 進行比較的核心特徵。
-    
-    Args:
-        audio_path (str): 音檔的路徑 (例如 'my_song.mp3' 或 'input.wav')
-        
-    Returns:
-        dict: 包含特徵數據的字典
+    使用 librosa 產出「結構與語意」盡量貼近 MSD / Echo Nest 的 audio analysis
     """
-    try:
-        # 1. 載入音檔
-        # sr=22050 是 librosa 的預設採樣率，也是許多音樂分析的標準
-        y, sr = librosa.load(audio_path, sr=22050)
-        
-        print(f"正在處理: {audio_path} | 長度: {len(y)/sr:.2f} 秒")
 
-        # ---------------------------------------------------------
-        # 2. 提取特徵 (Feature Extraction)
-        # ---------------------------------------------------------
+    # =========================
+    # 1. 載入音訊
+    # =========================
+    y, sr = librosa.load(audio_path, sr=sr, mono=True)
+    duration = float(len(y) / sr)
 
-        # A. MFCC (Mel-frequency cepstral coefficients) - 音色特徵
-        # MSD 中包含類似的 Timbre 數據。MFCC 是語音和音樂處理中最常用的音色特徵。
-        # n_mfcc=13 是標準設定，足以捕捉大部份音色資訊。
-        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
-        
-        # B. Chroma (色譜圖) - 音高/和聲特徵
-        # 這代表了音樂的 12 個半音 (C, C#, D...) 的能量分佈，不管八度音高。
-        # 這對於比較兩首歌是否使用相似的和弦進行非常有用。
-        chroma = librosa.feature.chroma_stft(y=y, sr=sr)
-        
-        # C. Spectral Contrast - 頻譜對比度
-        # 用於區分音樂的「紋理」，例如區分強烈的節奏音樂與平滑的音樂。
-        contrast = librosa.feature.spectral_contrast(y=y, sr=sr)
+    # =========================
+    # 2. Track-level features
+    # =========================
+    tempo, beat_frames = librosa.beat.beat_track(
+        y=y, sr=sr, hop_length=hop_length
+    )
+    tempo = float(np.asarray(tempo).item())
 
-        # D. Tempo - 節奏 (BPM)
-        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+    rms = librosa.feature.rms(y=y, hop_length=hop_length)[0]
+    loudness = float(librosa.amplitude_to_db(rms, ref=np.max).mean())
 
-        # ---------------------------------------------------------
-        # 3. 數據聚合 (Aggregation / Statistics)
-        # ---------------------------------------------------------
-        # Librosa 提取出來的是「每一幀(frame)」的數據（時間序列）。
-        # 為了存入資料庫並做快速比對，我們通常取「平均值(Mean)」和「變異數(Var)」。
-        # 這能把一整首歌壓縮成一個一維的向量。
+    # =========================
+    # 3. Beat / Bar / Tatum
+    # =========================
+    beats_start = librosa.frames_to_time(
+        beat_frames, sr=sr, hop_length=hop_length
+    ).tolist()
 
-        features = {
-            "tempo": float(tempo), # 轉為 float 以便存入 DB
-            
-            # MFCC 統計數據 (13個數值的平均 與 13個數值的變異數)
-            "mfcc_mean": np.mean(mfcc, axis=1).tolist(),
-            "mfcc_var": np.var(mfcc, axis=1).tolist(),
-            
-            # Chroma 統計數據 (12個音的平均能量)
-            "chroma_mean": np.mean(chroma, axis=1).tolist(),
-            
-            # Contrast 統計數據
-            "contrast_mean": np.mean(contrast, axis=1).tolist()
-        }
+    # MSD 有 bars / tatums，但 librosa 沒有 → 只能用 beat 近似
+    bars_start = beats_start[::4]      # 假設 4 beats = 1 bar
+    tatums_start = librosa.frames_to_time(
+        librosa.onset.onset_detect(y=y, sr=sr, hop_length=hop_length),
+        sr=sr, hop_length=hop_length
+    ).tolist()
 
-        return features
+    # =========================
+    # 4. Segment-level features（MSD 核心）
+    # =========================
+    # 使用 onset 作為 segment 邊界（最接近 Echo Nest 的概念）
+    segment_frames = librosa.onset.onset_detect(
+        y=y, sr=sr, hop_length=hop_length, backtrack=True
+    )
+    segment_frames = np.append(segment_frames, len(rms))
 
-    except Exception as e:
-        print(f"處理音檔時發生錯誤: {e}")
-        return None
+    # frame-level features
+    chroma = librosa.feature.chroma_stft(
+        y=y, sr=sr, hop_length=hop_length
+    )
+    mfcc = librosa.feature.mfcc(
+        y=y, sr=sr, n_mfcc=12, hop_length=hop_length
+    )
 
-# --- 使用範例 ---
-# 假設你有一個檔案叫 'test_song.wav' (請換成你實際的檔案路徑)
-# file_path = 'test_song.wav' 
-# data = extract_features(file_path)
+    segments_start = []
+    segments_pitches = []
+    segments_timbre = []
+    segments_loudness_start = []
+    segments_loudness_max = []
+    segments_loudness_max_time = []
 
-# if data:
-#     print("特徵提取成功！數據結構如下：")
-#     print(json.dumps(data, indent=4))
+    for i in range(len(segment_frames) - 1):
+        a, b = segment_frames[i], segment_frames[i + 1]
+        if b <= a:
+            continue
+
+        start_time = librosa.frames_to_time(
+            a, sr=sr, hop_length=hop_length
+        )
+
+        # pitches = chroma (12)
+        pitch = np.mean(chroma[:, a:b], axis=1)
+        pitch = (pitch / (np.max(pitch) + 1e-9)).tolist()
+
+        # timbre = MFCC-like (12)
+        timbre = np.mean(mfcc[:, a:b], axis=1).tolist()
+
+        # loudness
+        loud_start = float(rms[a])
+        loud_max = float(np.max(rms[a:b]))
+        loud_max_frame = a + np.argmax(rms[a:b])
+        loud_max_time = librosa.frames_to_time(
+            loud_max_frame, sr=sr, hop_length=hop_length
+        ) - start_time
+
+        segments_start.append(float(start_time))
+        segments_pitches.append(pitch)
+        segments_timbre.append(timbre)
+        segments_loudness_start.append(loud_start)
+        segments_loudness_max.append(loud_max)
+        segments_loudness_max_time.append(float(loud_max_time))
+
+    # =========================
+    # 5. 組成 MSD-like 結構
+    # =========================
+    return {
+        "track": {
+            "duration": duration,
+            "tempo": tempo,
+            "loudness": loudness
+        },
+        "bars_start": bars_start,
+        "beats_start": beats_start,
+        "tatums_start": tatums_start,
+
+        "segments_start": segments_start,
+        "segments_pitches": segments_pitches,
+        "segments_timbre": segments_timbre,
+        "segments_loudness_start": segments_loudness_start,
+        "segments_loudness_max": segments_loudness_max,
+        "segments_loudness_max_time": segments_loudness_max_time
+    }
+
+
+if __name__ == "__main__":
+    base = os.path.dirname(os.path.abspath(__file__))
+    audio = os.path.join(base, "test_data","test_song.wav")
+
+    data = audio_extractor(audio)
+    print(json.dumps(data, indent=2, ensure_ascii=False))
