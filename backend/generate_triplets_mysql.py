@@ -1,16 +1,20 @@
 import mysql.connector
 import pandas as pd
 import random
+import os
+from dotenv import load_dotenv
 
+load_dotenv()
+#環境帳秘自訂
 DB_CONFIG = {
-    "host": "127.0.0.1",
-    "port": 3306,
-    "user": "msd_user",
-    "password": "Msd123456",
-    "database": "msd",
+    "host": os.getenv("DB_HOST"),
+    "port": int(os.getenv("DB_PORT", 3306)),
+    "user": os.getenv("DB_USER"),
+    "password": os.getenv("DB_PASSWORD"),
+    "database": os.getenv("DB_NAME"),
 }
 
-OUTPUT_CSV = "triplets.csv"
+OUTPUT_CSV = os.path.join(os.path.dirname(__file__), "triplets.csv")
 NUM_TRIPLETS = 10000
 
 def generate_triplet_csv():
