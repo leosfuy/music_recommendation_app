@@ -1,20 +1,29 @@
-#模型預處理
-import sqlite3
-import torch
-import torch.nn as nn
-import numpy as np
-import json
-from tqdm import tqdm
 import os
+import json # &numpy 把 json 轉數字矩陣
+import numpy as np 
+import torch #模型
+import torch.nn as nn
+from tqdm import tqdm
+import mysql.connector
+from dotenv import load_dotenv #載環境
 
-# ================= 設定區 =================
-DB_FILE = "training_data.db"
-MODEL_PATH = "bestcnn_model.pth" # 確保你有這個訓練好的模型
-MAX_LEN = 500
-BATCH_SIZE = 32
+load_dotenv()
+
+# ================= 設定區 =================(資料量)
+MODEL_PATH = "bestcnn_model.pth"
+MAX_LEN = 500 #每首歌時間序列統一成500(啥是時間序列????)
+BATCH_SIZE = 32 #一次處理32首
 # =========================================
 
-# 1. 模型結構
+DB_CONFIG = {
+    "host": os.getenv("DB_HOST"),
+    "port": int(os.getenv("DB_PORT", "3306")),
+    "user": os.getenv("DB_USER"),
+    "password": os.getenv("DB_PASSWORD"),
+    "database": os.getenv("DB_NAME"),
+}
+
+# 1. 模型結構（要跟 train 完全一樣） 定義模型
 class MusicCNN(nn.Module):
     def __init__(self):
         super(MusicCNN, self).__init__()
@@ -34,82 +43,109 @@ class MusicCNN(nn.Module):
         x = self.fc(x)
         return x / x.norm(dim=1, keepdim=True)
 
-# 2. 資料處理
+# 2. 批次預處理:把 DB 的 JSON 字串變成模型可以吃的 Tensor(查Tensor是啥)
 def preprocess_batch(rows):
     tensors = []
     valid_indices = []
     for i, row in enumerate(rows):
         try:
-            # 注意索引：[0]id, [1]seg_timbre, [2]seg_pitches
-            t = np.array(json.loads(row[1]), dtype=np.float32)
-            p = np.array(json.loads(row[2]), dtype=np.float32)
-            combined = np.concatenate([t, p], axis=1)
-            
+            # row = (song_id, segments_timbre, segments_pitches)
+            t = np.array(json.loads(row["segments_timbre"]), dtype=np.float32)
+            p = np.array(json.loads(row["segments_pitches"]), dtype=np.float32)
+
+            combined = np.concatenate([t, p], axis=1)  # (Time, 24)
+
             curr_len = combined.shape[0]
             if curr_len > MAX_LEN:
                 combined = combined[:MAX_LEN, :]
             else:
                 padding = np.zeros((MAX_LEN - curr_len, 24), dtype=np.float32)
                 combined = np.vstack((combined, padding))
-            tensors.append(combined.T)
+
+            tensors.append(combined.T)   # (24, MAX_LEN)
             valid_indices.append(i)
         except:
             continue
-    if not tensors: return None, []
-    return torch.tensor(np.array(tensors)), valid_indices
+
+    if not tensors:
+        return None, []
+
+    return torch.tensor(np.array(tensors)), valid_indices  # (B,24,MAX_LEN)
+
+def ensure_embedding_column(cursor):
+    cursor.execute("""
+        SELECT COUNT(*) AS c
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'training_songs'
+          AND COLUMN_NAME = 'embedding'
+    """)
+    exists = cursor.fetchone()["c"]   # dictionary cursor 要用 key 取值
+
+    if not exists:
+        cursor.execute("ALTER TABLE training_songs ADD COLUMN embedding BLOB NULL")
+
 
 def main():
-    print("🚀 [Step 1] 準備資料庫結構...")
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    
-    # 檢查並新增 embedding 欄位
-    cursor.execute("PRAGMA table_info(training_songs)")
-    columns = [info[1] for info in cursor.fetchall()]
-    if "embedding" not in columns:
-        cursor.execute("ALTER TABLE training_songs ADD COLUMN embedding BLOB")
-        conn.commit()
+    print("🚀 [Step 1] 連線 MySQL & 準備欄位...")
+    conn = mysql.connector.connect(**DB_CONFIG)
+    cursor = conn.cursor(dictionary=True)
+
+    ensure_embedding_column(cursor)
+    conn.commit()
 
     print("🚀 [Step 2] 載入模型...")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = MusicCNN().to(device)
-    # 如果找不到模型會報錯，請確認 bestcnn_model.pth 在同目錄
     model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
     model.eval()
+    print("device =", device)
 
-    print("🚀 [Step 3] 開始計算全庫 Embedding...")
-    cursor.execute("SELECT count(*) FROM training_songs")
-    total = cursor.fetchone()[0]
-    
-    # 只撈需要的三個欄位
-    cursor.execute("SELECT song_id, segments_timbre, segments_pitches FROM training_songs")
-    
+    print("🚀 [Step 3] 計算全庫 Embedding...")
+
+    # 先拿總數（進度條用）
+    cursor.execute("SELECT COUNT(*) AS cnt FROM training_songs")
+    total = cursor.fetchone()["cnt"]
     progress = tqdm(total=total)
-    
+
+    last_song_id = ""  # 用字典序分頁
+
     while True:
-        rows = cursor.fetchmany(BATCH_SIZE)
-        if not rows: break
-        
+        cursor.execute("""
+            SELECT song_id, segments_timbre, segments_pitches
+            FROM training_songs
+            WHERE song_id > %s
+            ORDER BY song_id
+            LIMIT %s
+        """, (last_song_id, BATCH_SIZE))
+
+        rows = cursor.fetchall()
+        if not rows:
+            break
+
         batch_tensors, valid_indices = preprocess_batch(rows)
-        
+
         if batch_tensors is not None:
             batch_tensors = batch_tensors.to(device)
             with torch.no_grad():
                 embeddings = model(batch_tensors).cpu().numpy()
-            
+
             update_list = []
             for i, emb in enumerate(embeddings):
                 orig_idx = valid_indices[i]
-                s_id = rows[orig_idx][0]
-                update_list.append((emb.tobytes(), s_id))
-            
-            conn.executemany("UPDATE training_songs SET embedding = ? WHERE song_id = ?", update_list)
+                s_id = rows[orig_idx]["song_id"]
+                update_list.append((emb.astype(np.float32).tobytes(), s_id))
+
+            cursor.executemany(
+                "UPDATE training_songs SET embedding=%s WHERE song_id=%s",
+                update_list
+            )
             conn.commit()
-            
+
+        last_song_id = rows[-1]["song_id"]
         progress.update(len(rows))
-        
-    conn.close()
-    print("\n✅ 所有歌曲特徵計算完成！現在可以進行推薦")
+
+
 
 if __name__ == "__main__":
     main()
