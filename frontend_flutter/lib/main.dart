@@ -82,7 +82,7 @@ class _UploadPageState extends State<UploadPage> {
 
       request.files.add(await http.MultipartFile.fromPath("file", file.path));
 
-      var streamedResponse = await request.send();
+      var streamedResponse = await request.send(); //送音檔給後端並等待後端回傳資料
       var response = await http.Response.fromStream(
         streamedResponse,
       ); //把stream轉成完整的response

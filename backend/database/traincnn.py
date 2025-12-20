@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm  # 進度條工具
+
 load_dotenv()
 
 # ================= 設定區 =================
