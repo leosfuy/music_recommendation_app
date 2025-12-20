@@ -4,6 +4,9 @@ import numpy as np
 import json
 import sys
 import hdf5_getters
+from dotenv import load_dotenv #載環境
+
+load_dotenv()
 
 def read_song(path):
     """
@@ -88,10 +91,10 @@ MSDRootDir = "./msd_targz" #原始資料位置 將msd_targz放在music_recommend
 if __name__ == "__main__":
     #建立連線
     try:
-        connection = mysql.connector.connect(host="localhost", # MySQL 主機位置(localhost = 127.0.0.1 = 本機)
-                                             port="3306",
-                                             user="root",
-                                             password="12345678")
+        connection = mysql.connector.connect(host=os.getenv("DB_HOST"), # MySQL 主機位置(localhost = 127.0.0.1 = 本機)
+                                             port=int(os.getenv("DB_PORT", "3306")),
+                                             user=os.getenv("DB_USER"),
+                                             password=os.getenv("DB_PASSWORD"))
     except mysql.connector.Error as err:
         print("資料庫連線失敗：", err)
         sys.exit(1)
