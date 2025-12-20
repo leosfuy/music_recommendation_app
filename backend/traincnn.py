@@ -1,4 +1,6 @@
-import sqlite3
+import mysql.connector
+import os
+from dotenv import load_dotenv
 import pandas as pd
 import numpy as np
 import json
@@ -7,9 +9,17 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm  # 進度條工具
+load_dotenv()
 
 # ================= 設定區 =================
-DB_FILE = "training_data.db"
+DB_CONFIG = {
+    "host": os.getenv("DB_HOST"),
+    "port": int(os.getenv("DB_PORT", "3306")),
+    "user": os.getenv("DB_USER"),
+    "password": os.getenv("DB_PASSWORD"),
+    "database": os.getenv("DB_NAME"),
+}
+
 TRIPLET_CSV = "triplets.csv"
 MODEL_SAVE_PATH = "bestcnn_model.pth"
 
@@ -22,9 +32,12 @@ EPOCHS = 10      # 訓練幾輪
 
 # 1. 定義 Dataset (負責把資料從 DB 挖出來變矩陣)
 class MSDTripletDataset(Dataset):
-    def __init__(self, csv_file, db_file):
+    def __init__(self, csv_file):
         self.triplets = pd.read_csv(csv_file)
-        self.db_file = db_file
+
+        # 建立一條長連線給 Dataset 用（避免每筆資料都連一次）
+        self.conn = mysql.connector.connect(**DB_CONFIG)
+        self.cursor = self.conn.cursor(buffered=True)
         
     def __len__(self):
         return len(self.triplets)
@@ -56,30 +69,42 @@ class MSDTripletDataset(Dataset):
             return torch.zeros((24, MAX_LEN), dtype=torch.float32)
 
     def __getitem__(self, idx):
-        # 1. 拿出一組題目 (Anchor, Positive, Negative)
         row = self.triplets.iloc[idx]
         ids = [row['anchor_id'], row['positive_id'], row['negative_id']]
-        
+
         tensors = []
-        
-        # 2. 連線 DB (每次讀取都連線一次確保 Thread Safe)
-        conn = sqlite3.connect(self.db_file)
-        cursor = conn.cursor()
-        
+
         for song_id in ids:
-            cursor.execute("SELECT segments_timbre, segments_pitches FROM training_songs WHERE song_id=?", (song_id,))
-            result = cursor.fetchone()
-            
-            if result:
-                tensors.append(self.preprocess(result[0], result[1]))
-            else:
-                # 找不到就給全 0
-                tensors.append(torch.zeros((24, MAX_LEN), dtype=torch.float32))
-                
-        conn.close()
-        
-        # 回傳三個 Tensor: Anchor, Positive, Negative
+            try:
+                self.cursor.execute(
+                    "SELECT segments_timbre, segments_pitches FROM training_songs WHERE song_id=%s",
+                    (song_id,)
+                )
+                result = self.cursor.fetchone()
+
+                if result:
+                    tensors.append(self.preprocess(result[0], result[1]))
+                else:
+                    tensors.append(torch.zeros((24, MAX_LEN), dtype=torch.float32))
+
+            except mysql.connector.Error:
+                # 如果連線真的斷了：重連一次再查（避免整個訓練死掉）
+                self.conn.close()
+                self.conn = mysql.connector.connect(**DB_CONFIG)
+                self.cursor = self.conn.cursor(buffered=True)
+
+                self.cursor.execute(
+                    "SELECT segments_timbre, segments_pitches FROM training_songs WHERE song_id=%s",
+                    (song_id,)
+                )
+                result = self.cursor.fetchone()
+                if result:
+                    tensors.append(self.preprocess(result[0], result[1]))
+                else:
+                    tensors.append(torch.zeros((24, MAX_LEN), dtype=torch.float32))
+
         return tensors[0], tensors[1], tensors[2]
+
 
 # 2. 定義 CNN 模型 (廚師)
 class MusicCNN(nn.Module):
@@ -109,17 +134,27 @@ class MusicCNN(nn.Module):
         x = self.conv_layers(x)
         x = x.view(x.size(0), -1) # 拉直
         x = self.fc(x)
-        # L2 Normalize (對於計算 Cosine Similarity 很重要)
+                  # L2 Normalize (對於計算 Cosine Similarity 很重要)    
         return x / x.norm(dim=1, keepdim=True)
+
+    def __del__(self):
+        try:
+            self.cursor.close()
+            self.conn.close()
+        except:
+            pass
+
 
 # 3. 訓練主程式
 if __name__ == "__main__":
     print("🔥 載入 Dataset...")
-    dataset = MSDTripletDataset(TRIPLET_CSV, DB_FILE)
+    dataset = MSDTripletDataset(TRIPLET_CSV)
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
     
     print("🧠 初始化模型...")
     model = MusicCNN()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = MusicCNN().to(device)
     
     # 這是專門給三元組用的 Loss Function
     # margin=1.0 代表：希望 正樣本距離 比 負樣本距離 近至少 1.0
@@ -138,6 +173,10 @@ if __name__ == "__main__":
         for anchor, positive, negative in progress_bar:
             optimizer.zero_grad()
             
+            anchor = anchor.to(device)
+            positive = positive.to(device)
+            negative = negative.to(device)
+
             # 1. 算出三個向量
             emb_a = model(anchor)
             emb_p = model(positive)
