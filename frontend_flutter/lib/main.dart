@@ -5,7 +5,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
-String server = "192.168.168.19:8000"; // 伺服器ip和port
+String server = "10.80.171.247:8000"; // 伺服器ip和port
 const keyNames = {
   "0": "C",
   "1": "C#/Db",
@@ -202,8 +202,8 @@ class ResultPage extends StatelessWidget {
         itemBuilder: (context, index) {
           var song = results[index];
           return ListTile(
-            title: Text(song["title"]), //歌名
-            subtitle: Text(song["result"] ?? ""), //相似度
+            title: Text("Top${(index + 1).toString()}: ${song["title"]}"), //歌名
+            //subtitle: Text(song["similarity"] ?? ""), //相似度
             onTap: () {
               //點擊看詳細資料
               Navigator.push(
@@ -321,7 +321,7 @@ class DetailPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(song["file"])),
+      appBar: AppBar(title: Text("詳細資訊")),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: SingleChildScrollView(
@@ -329,7 +329,7 @@ class DetailPage extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text("歌名：${song["title"] ?? ""}"),
-              Text("作者：${song["artist_name"] ?? ""}"),
+              Text("作者：${song["artist"] ?? ""}"),
               Text(
                 "年份：${song["year"].toString() != "0" ? song["year"] : "未知"}",
               ),
@@ -342,7 +342,7 @@ class DetailPage extends StatelessWidget {
               //Text("音色(Timbre) 標準差：${song["timbre_std"] ?? ""}"),
               //Text("音高(Pitches) 平均值：${song["pitches_mean"] ?? ""}"),
               //Text("音高(Pitches) 標準差：${song["pitches_std"] ?? ""}"),
-              Text("相似度結果：${song["result"] ?? ""}"),
+              //Text("相似度結果：${song["similarity"] ?? ""}"),
             ],
           ),
         ),

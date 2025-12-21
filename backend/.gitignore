@@ -214,3 +214,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+upload_audios/
+song_embeddings.index
+ids.npy

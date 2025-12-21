@@ -50,8 +50,8 @@ def preprocess_batch(rows):
     for i, row in enumerate(rows):
         try:
             # row = (song_id, segments_timbre, segments_pitches)
-            t = np.array(json.loads(row["segments_timbre"]), dtype=np.float32)
-            p = np.array(json.loads(row["segments_pitches"]), dtype=np.float32)
+            t = np.array(json.loads(row["timbre_segments"]), dtype=np.float32)
+            p = np.array(json.loads(row["pitches_segments"]), dtype=np.float32)
 
             combined = np.concatenate([t, p], axis=1)  # (Time, 24)
 
@@ -77,13 +77,13 @@ def ensure_embedding_column(cursor):
         SELECT COUNT(*) AS c
         FROM INFORMATION_SCHEMA.COLUMNS
         WHERE TABLE_SCHEMA = DATABASE()
-          AND TABLE_NAME = 'training_songs'
+          AND TABLE_NAME = 'songs'
           AND COLUMN_NAME = 'embedding'
     """)
     exists = cursor.fetchone()["c"]   # dictionary cursor 要用 key 取值
 
     if not exists:
-        cursor.execute("ALTER TABLE training_songs ADD COLUMN embedding BLOB NULL")
+        cursor.execute("ALTER TABLE songs ADD COLUMN embedding BLOB NULL")
 
 
 def main():
@@ -104,20 +104,20 @@ def main():
     print("🚀 [Step 3] 計算全庫 Embedding...")
 
     # 先拿總數（進度條用）
-    cursor.execute("SELECT COUNT(*) AS cnt FROM training_songs")
+    cursor.execute("SELECT COUNT(*) AS cnt FROM songs")
     total = cursor.fetchone()["cnt"]
     progress = tqdm(total=total)
 
-    last_song_id = ""  # 用字典序分頁
+    last_id = 0  # 已經處理到的歌的id
 
     while True:
         cursor.execute("""
-            SELECT song_id, segments_timbre, segments_pitches
-            FROM training_songs
-            WHERE song_id > %s
-            ORDER BY song_id
+            SELECT id, timbre_segments, pitches_segments
+            FROM songs
+            WHERE id > %s
+            ORDER BY id
             LIMIT %s
-        """, (last_song_id, BATCH_SIZE))
+        """, (last_id, BATCH_SIZE))
 
         rows = cursor.fetchall()
         if not rows:
@@ -133,16 +133,16 @@ def main():
             update_list = []
             for i, emb in enumerate(embeddings):
                 orig_idx = valid_indices[i]
-                s_id = rows[orig_idx]["song_id"]
+                s_id = rows[orig_idx]["id"]
                 update_list.append((emb.astype(np.float32).tobytes(), s_id))
 
             cursor.executemany(
-                "UPDATE training_songs SET embedding=%s WHERE song_id=%s",
+                "UPDATE songs SET embedding=%s WHERE id=%s",
                 update_list
             )
             conn.commit()
 
-        last_song_id = rows[-1]["song_id"]
+        last_id = rows[-1]["id"]
         progress.update(len(rows))
 
 
