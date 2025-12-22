@@ -5,7 +5,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
-String server = "10.80.171.247:8000"; // 伺服器ip和port
+String server = "192.168.0.57:8000"; // 伺服器ip和port
 const keyNames = {
   "0": "C",
   "1": "C#/Db",
@@ -287,7 +287,7 @@ class _HistoryPageState extends State<HistoryPage> {
       body: ListView.builder(
         itemCount: history.length,
         itemBuilder: (context, index) {
-          final item = history[index];
+          final item = history[history.length - 1 - index];
           return ListTile(
             title: Text("${item["uploaded_file"]}"),
             subtitle: Text(item["date"]),
@@ -318,6 +318,33 @@ class DetailPage extends StatelessWidget {
 
   const DetailPage({super.key, required this.song});
 
+  Future<void> sendSongToBackend(BuildContext context) async {
+    try {
+      final url = Uri.http(server, "/play");
+
+      final response = await http.post(
+        url,
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "title": song["title"] ?? "",
+          "artist_name": song["artist"] ?? "",
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text("已送出播放請求")));
+      } else {
+        throw Exception("上傳失敗，HTTP 狀態碼: ${response.statusCode}");
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("連線失敗，請檢查網路或後端是否啟動: $e")));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -343,6 +370,16 @@ class DetailPage extends StatelessWidget {
               //Text("音高(Pitches) 平均值：${song["pitches_mean"] ?? ""}"),
               //Text("音高(Pitches) 標準差：${song["pitches_std"] ?? ""}"),
               //Text("相似度結果：${song["similarity"] ?? ""}"),
+              const SizedBox(height: 200), // 間距
+
+              Center(
+                child: ElevatedButton(
+                  onPressed: () async {
+                    await sendSongToBackend(context);
+                  },
+                  child: const Text("播放歌曲"),
+                ),
+              ),
             ],
           ),
         ),
