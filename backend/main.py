@@ -2,7 +2,7 @@
 # 啟動伺服器：uvicorn main:app --reload --host 0.0.0.0 --port 8000
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-import numpy as np
+from fastapi.concurrency import run_in_threadpool
 import uuid
 import shutil
 import os
@@ -76,8 +76,8 @@ async def play(req: PlayRequest):
     if not query:
         return {"status": "error", "message": "缺少 song_query 或 title/artist_name"}
 
-    # 呼叫你 spotifyapi.py 的 play_song 來播放
-    success, message = play_song(query)
+    # 呼叫你 spotifyapi.py 的 play_song 來播放   把同步 Spotify 呼叫丟進 thread pool
+    success, message = await run_in_threadpool(play_song, query)
 
     if success:
         return {"status": "success", "playing": message}
