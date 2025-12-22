@@ -14,25 +14,23 @@ sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
     scope="user-modify-playback-state user-read-playback-state"
 ))
 
-def play_song(song_name):
+def play_song(song_name: str) -> tuple[bool, str]:
     try:
-        # 搜尋歌曲
         results = sp.search(q=song_name, limit=1, type='track')
         if not results['tracks']['items']:
-            print(f"找不到歌曲: {song_name}")
-            return
+            return False, f"找不到歌曲: {song_name}"
 
-        track_uri = results['tracks']['items'][0]['uri']
-        track_name = results['tracks']['items'][0]['name']
-        
-        # 開始播放
+        track = results['tracks']['items'][0]
+        track_uri = track['uri']
+        track_name = track['name']
+        artist_name = track['artists'][0]['name'] if track.get('artists') else ""
+
         sp.start_playback(uris=[track_uri])
-        print(f"正在播放: {track_name}")
-        
-    except Exception as e:
-        print("播放失敗 (請確認你的 Spotify App 是打開的，且你是 Premium 會員)")
-        print(f"錯誤訊息: {e}")
+        return True, f"{track_name} - {artist_name}"
 
-# --- 測試 ---
-# 把這裡換成你模型推薦出來的歌名
-play_song("Never Gonna Give You Up Rick Astley")
+    except Exception as e:
+        return False, f"播放失敗: {e}"
+
+if __name__ == "__main__":
+    ok, msg = play_song("Never Gonna Give You Up Rick Astley")
+    print(ok, msg)

@@ -10,6 +10,10 @@ from audio_extractor import audio_extractor_msd_like
 from getEmbedding import getEmbedding
 from recommend import recommend_from_embedding
 
+from spotifyapi import play_song
+from pydantic import BaseModel
+
+
 app = FastAPI()
 
 # 允許跨來源（Flutter 前端要能連到這裡）
@@ -43,5 +47,41 @@ async def upload(file: UploadFile = File(...)): # 從 HTTP multipart/form-data �
     print(result)
 
     return result
+
+# 新增功能：點選某首歌 → 呼叫 /play → 播放
+class PlayRequest(BaseModel):  # 定義前端要傳什麼資料
+    title: str | None = None
+    artist_name: str | None = None
+    song_query: str | None = None  # 前端也可以直接傳 "歌名 歌手"
+
+
+@app.post("/play")
+async def play(req: PlayRequest):
+    """
+    前端點選某首歌時呼叫這個 API
+    你可以傳：
+      1) song_query: "歌名 歌手"
+      或
+      2) title + artist_name
+    """
+
+    # 決定要拿什麼去搜尋 Spotify
+    if req.song_query and req.song_query.strip():
+        query = req.song_query.strip()
+    else:
+        title = (req.title or "").strip()
+        artist = (req.artist_name or "").strip()
+        query = f"{title} {artist}".strip()
+
+    if not query:
+        return {"status": "error", "message": "缺少 song_query 或 title/artist_name"}
+
+    # 呼叫你 spotifyapi.py 的 play_song 來播放
+    success, message = play_song(query)
+
+    if success:
+        return {"status": "success", "playing": message}
+    else:
+        return {"status": "error", "message": message}
 
 
