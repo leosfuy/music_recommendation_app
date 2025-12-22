@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 String server = "192.168.0.57:8000"; // 伺服器ip和port
 const keyNames = {
@@ -313,10 +314,47 @@ class _HistoryPageState extends State<HistoryPage> {
 
 // ================= DetailPage =================
 
-class DetailPage extends StatelessWidget {
+class DetailPage extends StatefulWidget {
   final Map<String, dynamic> song;
 
   const DetailPage({super.key, required this.song});
+
+  @override
+  State<DetailPage> createState() => _DetailPageState();
+}
+
+class _DetailPageState extends State<DetailPage> {
+  final AudioPlayer _player = AudioPlayer();
+  bool _isPlaying = false;
+
+  Future<void> _playPreview() async {
+    final previewUrl = widget.song["preview_url"];
+    if (previewUrl == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("此歌曲沒有預覽可播放")));
+      return;
+    }
+
+    if (_isPlaying) {
+      await _player.stop();
+      setState(() {
+        _isPlaying = false;
+      });
+    } else {
+      await _player.play(UrlSource(previewUrl));
+      setState(() {
+        _isPlaying = true;
+      });
+
+      // 播完自動停止
+      _player.onPlayerComplete.listen((event) {
+        setState(() {
+          _isPlaying = false;
+        });
+      });
+    }
+  }
 
   Future<void> sendSongToBackend(BuildContext context) async {
     try {
@@ -326,8 +364,8 @@ class DetailPage extends StatelessWidget {
         url,
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({
-          "title": song["title"] ?? "",
-          "artist_name": song["artist"] ?? "",
+          "title": widget.song["title"] ?? "",
+          "artist_name": widget.song["artist"] ?? "",
         }),
       );
 
@@ -341,14 +379,22 @@ class DetailPage extends StatelessWidget {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text("連線失敗，請檢查網路或後端是否啟動: $e")));
+      ).showSnackBar(SnackBar(content: Text("連線失敗: $e")));
     }
   }
 
   @override
+  void dispose() {
+    _player.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final song = widget.song;
+
     return Scaffold(
-      appBar: AppBar(title: Text("詳細資訊")),
+      appBar: AppBar(title: const Text("詳細資訊")),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: SingleChildScrollView(
@@ -365,19 +411,13 @@ class DetailPage extends StatelessWidget {
               Text("音量（Loudness）：${song["loudness"] ?? ""}"),
               Text("調性（Key）：${keyNames[song["key"].toString()]}"),
               Text("調式：${song["mode"].toString() == "1" ? "大調" : "小調"}"),
-              //Text("音色(Timbre) 平均值：${song["timbre_mean"] ?? ""}"),
-              //Text("音色(Timbre) 標準差：${song["timbre_std"] ?? ""}"),
-              //Text("音高(Pitches) 平均值：${song["pitches_mean"] ?? ""}"),
-              //Text("音高(Pitches) 標準差：${song["pitches_std"] ?? ""}"),
-              //Text("相似度結果：${song["similarity"] ?? ""}"),
-              const SizedBox(height: 200), // 間距
+              const SizedBox(height: 50),
 
               Center(
-                child: ElevatedButton(
-                  onPressed: () async {
-                    await sendSongToBackend(context);
-                  },
-                  child: const Text("播放歌曲"),
+                child: ElevatedButton.icon(
+                  icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
+                  label: Text(_isPlaying ? "暫停預覽" : "播放預覽"),
+                  onPressed: _playPreview,
                 ),
               ),
             ],
