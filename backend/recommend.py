@@ -3,6 +3,8 @@ import numpy as np
 import faiss
 import os
 from dotenv import load_dotenv #載環境
+import base64
+import requests
 
 load_dotenv()
 
@@ -10,6 +12,8 @@ load_dotenv()
 # 載入 index
 INDEX_PATH = "song_embeddings.index"
 IDS_PATH = "ids.npy"
+CLIENT_ID = 'c40907cd4ead4ce2ada0f89079471c95'
+CLIENT_SECRET = '022585f2f73c439a8e8aec24180458c3'
 
 if not os.path.exists(INDEX_PATH):
     raise FileNotFoundError(
@@ -61,6 +65,7 @@ def recommend_from_embedding(input_embedding, top_k=5):
     results = []
     for sid, sim in zip(matched_ids, similarities):
         r = song_map[sid]
+        preview_url = get_preview_url(r["title"], r["artist_name"])  # <-- 呼叫 Spotify API
         results.append({
             "title": str(r["title"]),
             "artist": str(r["artist_name"]),
@@ -70,7 +75,29 @@ def recommend_from_embedding(input_embedding, top_k=5):
             "loudness": str(r["loudness"]),
             "key": str(r["key"]),
             "mode": str(r["mode"]),
-            "similarity": str(float(sim))
+            "similarity": str(float(sim)),
+            "preview_url": preview_url
         })
 
     return results
+
+def get_access_token():
+    auth_str = f"{CLIENT_ID}:{CLIENT_SECRET}"
+    b64_auth_str = base64.b64encode(auth_str.encode()).decode()
+    headers = {"Authorization": f"Basic {b64_auth_str}"}
+    data = {"grant_type": "client_credentials"}
+    res = requests.post("https://accounts.spotify.com/api/token", headers=headers, data=data)
+    res.raise_for_status()
+    return res.json()["access_token"]
+
+def get_preview_url(title, artist):
+    token = get_access_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    query = f"track:{title} artist:{artist}"
+    params = {"q": query, "type": "track", "limit": 1}
+    res = requests.get("https://api.spotify.com/v1/search", headers=headers, params=params)
+    res.raise_for_status()
+    items = res.json()["tracks"]["items"]
+    if not items:
+        return None
+    return items[0]["preview_url"]
